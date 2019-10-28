@@ -31,8 +31,8 @@ REPLACEMENT = [
     dict(name='soft', tau=0.01),
     dict(name='hard', rep_iter_a=600, rep_iter_c=500)
 ][0]            # you can try different target replacement strategies
-MEMORY_CAPACITY = 10000
-BATCH_SIZE = 32
+MEMORY_CAPACITY = 10
+BATCH_SIZE = 2
 
 RENDER = False
 OUTPUT_GRAPH = True
@@ -91,7 +91,7 @@ class Actor(object):
             self.t_replace_counter += 1
 
     def choose_action(self, s):
-        s = s[np.newaxis, :]    # single state
+        # s = s[np.newaxis, :]    # single state
         return self.sess.run(self.a, feed_dict={S: s})[0]  # single action
 
     def add_grad_to_graph(self, a_grads):
@@ -183,7 +183,7 @@ class Memory(object):
         self.pointer = 0
 
     def store_transition(self, s, a, r, s_):
-        transition = np.hstack((s, a, [r], s_))
+        transition = np.hstack((s, a.reshape([-1,a.shape[0]]), np.array([r]).reshape([-1,np.array([r]).shape[0]]), s_))
         index = self.pointer % self.capacity  # replace the old memory with new memory
         self.data[index, :] = transition
         self.pointer += 1
@@ -198,7 +198,8 @@ class Memory(object):
 # env = env.unwrapped
 # env.seed(1)
 env = Grid(pn.case5())
-state_dim = env.StateFeatures()[0]*env.StateFeatures()[1]
+Ns=env.StateFeatures()[0]*env.StateFeatures()[1]
+state_dim = Ns
 action_dim = env.ActionFeature()
 action_bound = 1
 
@@ -226,12 +227,15 @@ M = Memory(MEMORY_CAPACITY, dims=2 * state_dim + action_dim + 1)
 if OUTPUT_GRAPH:
     tf.summary.FileWriter("logs/", sess.graph)
 
-var = 3  # control exploration
+var = .1  # control exploration
 
+reward_episod_step= np.empty([MAX_EPISODES,MAX_EP_STEPS])
 t1 = time.time()
 for i in range(MAX_EPISODES):
     env.reset()
-    s = env.InitState()
+    s = env.InitState().reshape([-1,Ns])
+    ind = np.random.choice(np.arange(env.net.line.shape[0]))
+    env.Attack(ind)
     ep_reward = 0
     RENDER = False
     for j in range(MAX_EP_STEPS):
@@ -241,10 +245,15 @@ for i in range(MAX_EPISODES):
 
         # Add exploration noise
         a = actor.choose_action(s)
-        a = np.clip(np.random.normal(a, var), -2, 2)    # add randomness to action selection for exploration
-        s_, r, done, info = env.step(a)
+        print('---------------------------------------------')
+        print('In Episode: {} and Step: {}, The action set is as below:'.format(i,j))
+        print(a)
+        a = np.clip(np.random.normal(a, var), -1, 1)    # add randomness to action selection for exploration
+        s_, r, done= env.take_action(a)
+        s_ =s_.reshape([-1,Ns])
+        reward_episod_step[i,j] = r
 
-        M.store_transition(s, a, r / 10, s_)
+        M.store_transition(s, a, r , s_)
 
         if M.pointer > MEMORY_CAPACITY:
             var *= .9995    # decay the action randomness
@@ -261,9 +270,14 @@ for i in range(MAX_EPISODES):
         ep_reward += r
 
         if j == MAX_EP_STEPS-1:
-            print('Episode:', i, ' Reward: %i' % int(ep_reward), 'Explore: %.2f' % var, )
-            if ep_reward > -300:
-                RENDER = True
-            break
+            print('In Episode: {}, agent has reached to Maximum Step with Episode reward: {} and exploration rate: {}'.
+                  format(i,ep_reward,var))
+            # # print('Episode:', i, ' Reward: %i' % int(ep_reward), 'Explore: %.2f' % var, )
+            # # if ep_reward > -300:
+            # #     RENDER = True
+            # break
+        elif done == True:
+            print('In Episode: {}, and Step: {} agent has reached to Terminal with Episode reward: {} and exploration rate: {}'.
+                  format(i, j, ep_reward, var))
 
 print('Running time: ', time.time()-t1)
