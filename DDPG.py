@@ -15,7 +15,7 @@ tf.set_random_seed(1)
 #####################  hyper parameters  ####################
 
 MAX_EPISODES = 30000
-MAX_EP_STEPS = 5
+MAX_EP_STEPS = 10
 LR_A = 0.001    # learning rate for actor
 LR_C = 0.001    # learning rate for critic
 GAMMA = 0.9     # reward discount
@@ -23,8 +23,8 @@ REPLACEMENT = [
     dict(name='soft', tau=0.01),
     dict(name='hard', rep_iter_a=600, rep_iter_c=500)
 ][0]            # you can try different target replacement strategies
-MEMORY_CAPACITY = 10
-BATCH_SIZE = 2
+MEMORY_CAPACITY = 1000
+BATCH_SIZE = 32
 
 RENDER = False
 OUTPUT_GRAPH = True
@@ -63,9 +63,14 @@ class Actor(object):
         with tf.variable_scope(scope):
             init_w = tf.random_normal_initializer(0., 0.3)
             init_b = tf.constant_initializer(0.1)
-            net = tf.layers.dense(s, 30, activation=tf.nn.relu,
+            net0 = tf.layers.dense(s, 512, activation=tf.nn.relu,
                                   kernel_initializer=init_w, bias_initializer=init_b, name='l1',
                                   trainable=trainable)
+
+            net = tf.layers.dense(net0, 64, activation=tf.nn.relu,
+                                  kernel_initializer=init_w, bias_initializer=init_b, name='l2',
+                                  trainable=trainable)
+
             with tf.variable_scope('a'):
                 actions = tf.layers.dense(net, self.a_dim, activation=tf.nn.tanh, kernel_initializer=init_w,
                                           bias_initializer=init_b, name='a', trainable=trainable)
@@ -146,11 +151,16 @@ class Critic(object):
             init_b = tf.constant_initializer(0.1)
 
             with tf.variable_scope('l1'):
-                n_l1 = 30
+                n_l1 = 128
+                n_l2 =64
                 w1_s = tf.get_variable('w1_s', [self.s_dim, n_l1], initializer=init_w, trainable=trainable)
                 w1_a = tf.get_variable('w1_a', [self.a_dim, n_l1], initializer=init_w, trainable=trainable)
                 b1 = tf.get_variable('b1', [1, n_l1], initializer=init_b, trainable=trainable)
-                net = tf.nn.relu(tf.matmul(s, w1_s) + tf.matmul(a, w1_a) + b1)
+                net00 = tf.nn.relu(tf.matmul(s, w1_s) + tf.matmul(a, w1_a) + b1)
+
+            with tf.variable_scope('l2_s'):
+                net = tf.layers.dense(net00, n_l2, kernel_initializer=init_w, bias_initializer=init_b,
+                                      activation=tf.nn.relu, trainable=trainable)
 
             with tf.variable_scope('q'):
                 q = tf.layers.dense(net, 1, kernel_initializer=init_w, bias_initializer=init_b, trainable=trainable)   # Q(s,a)
@@ -262,8 +272,12 @@ for i in range(MAX_EPISODES):
         ep_reward += r
 
         if j == MAX_EP_STEPS-1:
+
             print('In Episode: {}, agent has reached to Maximum Step with Episode reward: {} and exploration rate: {}'.
                   format(i,ep_reward,var))
+
+            print('_________________________-----------------------------------------___________________________')
+            print('_________________________-----------------------------------------___________________________')
             # # print('Episode:', i, ' Reward: %i' % int(ep_reward), 'Explore: %.2f' % var, )
             # # if ep_reward > -300:
             # #     RENDER = True
@@ -271,5 +285,9 @@ for i in range(MAX_EPISODES):
         elif done == True:
             print('In Episode: {}, and Step: {} agent has reached to Terminal with Episode reward: {} and exploration rate: {}'.
                   format(i, j, ep_reward, var))
-
+            print('_________________________-----------------------------------------___________________________')
+            print('_________________________-----------------------------------------___________________________')
 print('Running time: ', time.time()-t1)
+
+
+a=1
