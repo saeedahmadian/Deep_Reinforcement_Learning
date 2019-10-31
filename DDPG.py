@@ -8,13 +8,16 @@ import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
 from GridTest import Grid
 import pandapower.networks as pn
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import normalize
+import matplotlib.pyplot as plt
 
 np.random.seed(1)
 tf.set_random_seed(1)
 
 #####################  hyper parameters  ####################
 
-MAX_EPISODES = 30000
+MAX_EPISODES = 1000
 MAX_EP_STEPS = 10
 LR_A = 0.001    # learning rate for actor
 LR_C = 0.001    # learning rate for critic
@@ -23,8 +26,8 @@ REPLACEMENT = [
     dict(name='soft', tau=0.01),
     dict(name='hard', rep_iter_a=600, rep_iter_c=500)
 ][0]            # you can try different target replacement strategies
-MEMORY_CAPACITY = 1000
-BATCH_SIZE = 32
+MEMORY_CAPACITY = 20
+BATCH_SIZE = 10
 
 RENDER = False
 OUTPUT_GRAPH = True
@@ -61,21 +64,24 @@ class Actor(object):
 
     def _build_net(self, s, scope, trainable):
         with tf.variable_scope(scope):
-            init_w = tf.random_normal_initializer(0., 0.3)
-            init_b = tf.constant_initializer(0.1)
-            net0 = tf.layers.dense(s, 512, activation=tf.nn.relu,
+            init_w = tf.random_normal_initializer(0., 0.1)
+            init_b = tf.constant_initializer(0)
+            norm_s= tf.layers.batch_normalization(s)
+            net0 = tf.layers.dense(norm_s, 512, activation=tf.nn.tanh,
                                   kernel_initializer=init_w, bias_initializer=init_b, name='l1',
                                   trainable=trainable)
-
-            net = tf.layers.dense(net0, 64, activation=tf.nn.relu,
+            net0 = tf.layers.batch_normalization(net0)
+            net = tf.layers.dense(net0, 64, activation=tf.nn.tanh,
                                   kernel_initializer=init_w, bias_initializer=init_b, name='l2',
                                   trainable=trainable)
+
+            net = tf.layers.batch_normalization(net)
 
             with tf.variable_scope('a'):
                 actions = tf.layers.dense(net, self.a_dim, activation=tf.nn.tanh, kernel_initializer=init_w,
                                           bias_initializer=init_b, name='a', trainable=trainable)
                 scaled_a = tf.multiply(actions, self.action_bound, name='scaled_a')  # Scale output to -action_bound to action_bound
-        return scaled_a
+        return actions
 
     def learn(self, s):   # batch update
         self.sess.run(self.train_op, feed_dict={S: s})
@@ -190,10 +196,13 @@ class Memory(object):
         self.data[index, :] = transition
         self.pointer += 1
 
-    def sample(self, n):
+    def sample(self, n,ls=70):
         assert self.pointer >= self.capacity, 'Memory has not been fulfilled'
+        ind = self.data[:,ls].argsort()
+        self.sort_data= self.data[ind[::-1]]
         indices = np.random.choice(self.capacity, size=n)
-        return self.data[indices, :]
+        # return self.data[indices, :]
+        return self.sort_data[0:n,:]
 
 
 # env = gym.make(ENV_NAME)
@@ -230,8 +239,8 @@ if OUTPUT_GRAPH:
     tf.summary.FileWriter("logs/", sess.graph)
 
 var = .1  # control exploration
-
-reward_episod_step= np.empty([MAX_EPISODES,MAX_EP_STEPS])
+reward=[]
+reward_episod_step= np.zeros([MAX_EPISODES,MAX_EP_STEPS])
 t1 = time.time()
 for i in range(MAX_EPISODES):
     env.reset()
@@ -245,26 +254,31 @@ for i in range(MAX_EPISODES):
         if RENDER:
             env.render()
 
-        # Add exploration noise
+        # Add exploration noise   normalize(s,norm='l1',axis=1)
         a = actor.choose_action(s)
         print('---------------------------------------------')
         print('In Episode: {} and Step: {}, The action set is as below:'.format(i,j))
         print(a)
-        a = np.clip(np.random.normal(a, var), -1, 1)    # add randomness to action selection for exploration
+        # a = np.clip(np.random.normal(a, var), -1, 1)    # add randomness to action selection for exploration
+        # a= np.random.normal(a,var)
         s_, r, done= env.take_action(a)
         s_ =s_.reshape([-1,Ns])
         reward_episod_step[i,j] = r
+
+        if j%5==0:
+            np.save('reward', reward)
 
         M.store_transition(s, a, r , s_)
 
         if M.pointer > MEMORY_CAPACITY:
             var *= .9995    # decay the action randomness
-            b_M = M.sample(BATCH_SIZE)
+            b_M = M.sample(BATCH_SIZE,state_dim + action_dim)
             b_s = b_M[:, :state_dim]
             b_a = b_M[:, state_dim: state_dim + action_dim]
             b_r = b_M[:, -state_dim - 1: -state_dim]
             b_s_ = b_M[:, -state_dim:]
-
+            # b_s= normalize(b_s,norm='l1',axis=1)
+            # b_s_ = normalize(b_s_,norm='l1',axis=1)
             critic.learn(b_s, b_a, b_r, b_s_)
             actor.learn(b_s)
 
@@ -276,8 +290,11 @@ for i in range(MAX_EPISODES):
             print('In Episode: {}, agent has reached to Maximum Step with Episode reward: {} and exploration rate: {}'.
                   format(i,ep_reward,var))
 
+
+
             print('_________________________-----------------------------------------___________________________')
             print('_________________________-----------------------------------------___________________________')
+            reward.append(ep_reward)
             # # print('Episode:', i, ' Reward: %i' % int(ep_reward), 'Explore: %.2f' % var, )
             # # if ep_reward > -300:
             # #     RENDER = True
@@ -287,6 +304,8 @@ for i in range(MAX_EPISODES):
                   format(i, j, ep_reward, var))
             print('_________________________-----------------------------------------___________________________')
             print('_________________________-----------------------------------------___________________________')
+            reward.append(ep_reward)
+
 print('Running time: ', time.time()-t1)
 
 
